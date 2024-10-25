@@ -4,139 +4,142 @@
 #include "esp_system.h"
 #include "NTPClient.h"
 
-
+// Configurações do sensor DHT22 e do pino
 #define DHTPIN 18
 #define DHTTYPE DHT22
 
-//Variaveis  esp_random
+// Variável para armazenar o ID do chip ESP32
 uint64_t chipid = 0;
 
+// Instâncias de cliente WiFi e MQTT
 WiFiClient wifiClient;
 PubSubClient mqttClient(wifiClient);  
 
+// Instância do sensor DHT
 DHT dht(DHTPIN, DHTTYPE);
 
+// Instância para obter horário via NTP (Network Time Protocol)
 WiFiUDP udp;
-NTPClient ntp(udp, "a.st1.ntp.br", 0, 60000);
+NTPClient ntp(udp, "a.st1.ntp.br", 0, 60000); // Define servidor e fuso horário (UTC)
 
 void setup() 
 {
   Serial.begin(115200);
-  Serial.println("DHTxx test!");
-  
-  //inicializa o sensor dht
+  Serial.println("Iniciando DHT e conexões...");
+
+  // Inicializa o sensor DHT
   dht.begin();
-  
-  // Conectar WiFi
+
+  // Conecta ao WiFi
   const char *SSID = "Redmi Note 9S"; 
   const char *PWD = "William111";
   wifi_connect(SSID, PWD);
 
-  //servidor ntp
+  // Inicializa e atualiza o cliente NTP
   ntp.begin();
-  ntp.forceUpdate(); 
+  ntp.forceUpdate();
 
-  //MQTT
+  // Configuração do servidor MQTT
   char *mqttServer = "200.145.153.203";
   int mqttPort = 1883;
-
   mqtt_connect(mqttServer, mqttPort);
 
-  //Mac Address ESP
-  chipid= ESP.getEfuseMac();
-  Serial.printf("%llu\n",chipid);
+  // Obtenção do endereço MAC do ESP
+  chipid = ESP.getEfuseMac();
+  Serial.printf("MAC ID: %llu\n", chipid);
 }
 
+// Função para conectar ao WiFi
 void wifi_connect (const char *SSID, const char *PWD)
 {
-  WiFi.begin(SSID,PWD);
+  WiFi.begin(SSID, PWD);
 
   while (WiFi.status() != WL_CONNECTED)
   {
-    Serial.printf("...");
+    Serial.printf(".");
     delay(500);
   }
   
-  Serial.print("Connected.\n");
+  Serial.println("Conectado ao WiFi.");
   Serial.println(WiFi.localIP());
 }
 
+// Callback para processar mensagens MQTT recebidas
 void mqtt_callback(char* topic, byte* payload, unsigned int length)
 {
-  Serial.print("Callback - Message:");
-  for (uint i = 0; i < length; i++) ]
+  Serial.print("Mensagem recebida: ");
+  for (uint i = 0; i < length; i++)
   {
     Serial.print((char)payload[i]);
   }
 }
 
+// Função para configurar e conectar ao broker MQTT
 void mqtt_connect (const char *mqttServer, int mqttPort)
 {
-  mqttClient.setServer(server, port); 
-  mqttClient.setCallback(callback);
+  mqttClient.setServer(mqttServer, mqttPort); 
+  mqttClient.setCallback(mqtt_callback);
 
   if (mqttClient.connect("ESP32_DHT22"))
   {
-    Serial.printf("Connecting ...\n");
-    mqttClient.subscribe("/commands");
+    Serial.printf("Conectando ao MQTT...\n");
+    mqttClient.subscribe("/commands"); // Inscrição no tópico de comandos
   }
 }
 
+// Função para reconectar ao MQTT se desconectado
 void mqtt_reconnect ()
 {
   while (!mqttClient.connected())
   {
-    Serial.printf("Reconnecting to Mqtt Broker ..\n");
+    Serial.printf("Reconectando ao broker MQTT...\n");
 
     if (mqttClient.connect("ESP32_DHT22"))
     {
-      Serial.printf("Connecting \n");
+      Serial.printf("Conectado ao MQTT\n");
       mqttClient.subscribe("/commands");
     }
   }
-  
-  Serial.printf("Conected to Mqtt Broker ...\n");
 }
 
+// Loop principal do programa
 void loop() 
 {
+  // Lê dados do sensor DHT
   float humidity = dht.readHumidity();
   float temperature = dht.readTemperature();
 
-  if ( isnan(humidity) || isnan(temperature) ) 
+  // Verifica se a leitura do sensor falhou
+  if (isnan(humidity) || isnan(temperature))
   {
-    Serial.println("Failed to read from DHT sensor!\n");
+    Serial.println("Falha ao ler o sensor DHT!");
     return;
   }
-  Serial.printf("Umidade: %.2f  \n", humidity, "%");
-  Serial.printf("Temperatura: %.2f °C \n", temperature);
+  Serial.printf("Umidade: %.2f%%\n", humidity);
+  Serial.printf("Temperatura: %.2f °C\n", temperature);
 
-  // pega a hora via ntp
+  // Obtém o horário via NTP
   long time = ntp.getEpochTime(); 
 
-// Verificando conexao
-  if ( !mqttClient.connected() )
+  // Verifica se o MQTT está conectado
+  if (!mqttClient.connected())
   {
     mqtt_reconnect();
   }
   mqttClient.loop();
 
-   long now = millis();
-
-  //variavel estatica usada para receber o valor de now 
+  // Envia os dados do sensor a cada 5 segundos
+  long now = millis();
   static long last_time = 0;
 
-  //envio de 5 em 5 segundos os valores do sensor para o broker mqtt
-  if(now - last_time >5000)
+  if (now - last_time > 5000)
   {
-    //DHT11 Read
-    char data [128] = {0};
-    snprintf(data,128,"{\"Id\":%llu,\"Temperature\":%d,\"Date\":%ld,\"Humidity\":%d}",chipid, temperature, time, humidity);
+    // Prepara dados JSON para envio via MQTT
+    char data[128] = {0};
+    snprintf(data, 128, "{\"Id\":%llu,\"Temperature\":%d,\"Date\":%ld,\"Humidity\":%d}", chipid, temperature, time, humidity);
     
-    mqttClient.publish("dht/data", data);
-    
-    last_time=now;
+    mqttClient.publish("dht/data", data); // Publica os dados no tópico MQTT
+    last_time = now;
   }
-  delay(1000);
+  delay(1000); // Pausa de 1 segundo entre as leituras
 }
-
